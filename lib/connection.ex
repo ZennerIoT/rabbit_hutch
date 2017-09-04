@@ -6,8 +6,7 @@ defmodule RabbitHutch.Connection do
     :timeout
 
   @channel_default_opts [
-    timeout: nil,
-    on_close: [:reopen]
+    timeout: nil
   ]
 
   defmacro __using__(_) do
@@ -25,12 +24,17 @@ defmodule RabbitHutch.Connection do
       def get_connection() do
         GenServer.call(__MODULE__, :get_connection)
       end
+
+      def next_retry(retry_num) do
+        :erlang.floor(min(max(:math.pow(retry_num, 2) * 250, 100), 10_000))
+      end
       
-      defoverridable [start_link: 1, channel: 2]
+      defoverridable [start_link: 1, channel: 2, next_retry: 1]
     end
   end
   
   @callback start_link(opts :: []) :: {:ok, pid} | {:error, term}
+  @callback next_retry(retry_num :: integer) :: timeout_ms :: integer
 
   @doc """
   Initializes the connection, returning the connection options.
@@ -65,16 +69,6 @@ defmodule RabbitHutch.Connection do
      If `nil`, return `{:error, :no_connection}` when not able to open a channel process.
      
      **Default**: `#{inspect Keyword.get(@channel_default_opts, :timeout)}`
-   * `:on_close` - When the channel closes, decides what should happen. 
-     Pass a list of actions that are executed in the order that was passed.
-
-    ** Default**: `#{inspect Keyword.get(@channel_default_opts, :on_close)}`
-
-    Available actions:
-     * `:info` - Sends `{:channel_closed, old_channel, reason}` to the given process
-     * `:exit` - Exits the given process for the same reason the channel closed.
-     * `:reopen` - Tries to re-open the channel immediately and returns it in the next call to `channel/2`.
-    
   """
   @callback channel(pid, opts :: []) :: {:ok, pid} | {:error, error :: error}
 
@@ -121,16 +115,21 @@ defmodule RabbitHutch.Connection do
     end
   end
 
-  defp next_retry(retry_num) do
-    :erlang.floor(min(max(:math.pow(retry_num, 2) * 250, 100), 10_000))
+  defp next_retry(state) do
+    state.module.next_retry(state.retry)
   end
 
   def handle_call({:get_channel, consumer, opts}, _from, state) do
+    reply = _get_channel(consumer, opts, state)
+    {:reply, reply, state}
+  end
+
+  def _get_channel(consumer, opts, state) do
     opts = opts ++ @channel_default_opts
     
-    case :ets.lookup(state.channels, consumer) do
-      [{^consumer, record}] ->
-        {:reply, {:ok, record.channel}, state}
+    case :ets.match(state.channels, {consumer, :_, :"$1"}) do
+      [[record]] ->
+        {:ok, record.channel}
       [] ->
         case AMQP.Channel.open(state.connection) do
           {:ok, channel} ->
@@ -138,10 +137,11 @@ defmodule RabbitHutch.Connection do
               channel: channel,
               consumer: consumer
             }
-            :ets.insert(state.channels, {consumer, record})
-            {:reply, {:ok, channel}, state}
+            Process.monitor(channel.pid)
+            :ets.insert(state.channels, {consumer, channel.pid, record})
+            {:ok, channel}
           other ->
-            {:reply, {:error, other}, state}
+            {:error, other}
         end
     end
   end
@@ -159,20 +159,55 @@ defmodule RabbitHutch.Connection do
     try_reconnect(state)
   end
 
-  def handle_info({:DOWN, _ref, :process, connection_pid, reason}, %{connection: %{pid: connection_pid}} = state) do
+  def handle_info({:DOWN, _ref, :process, connection_pid, reason}, %{connection: %{pid: connection_pid}, channels: channels} = state) do
     state = %{state | connection: nil}
-    # TODO go through the list of channels, handle the actions
+
+    channels
+    |> :ets.match({:"$1", :_, :_})
+    |> List.flatten()
+    |> Enum.uniq()
+    |> Enum.each(&send(&1, {:connection_down, reason}))
+
     Logger.error("#{inspect state.module} Connection to AMQP lost: #{inspect reason}")
     try_reconnect(state)
+  end
+
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %{channels: channels} = state) do
+    channels = :ets.match(channels, {:_, pid, :"$1"})
+    :ets.match_delete(channels, {:_, pid, :"$1"})
+    consumers = :ets.match(channels, {pid, :_, :"$1"})
+    :ets.match_delete(channels, {pid, :_, :"$1"})
+
+    Enum.each(channels, fn [record] -> 
+      send(record.consumer, {:channel_down, record.channel, reason})
+    end)
+
+    Enum.each(consumers, fn [record] ->
+      if Process.alive?(record.channel.pid), do: Process.exit(record.channel.pid, reason)
+    end)
+
+    {:noreply, state}
   end
 
   defp try_reconnect(state) do
     case connect(state) do
       {:ok, state} -> 
-        #TODO reopen all the channels
+        state.channels
+        |> :ets.match({:"$1", :_, :_})
+        |> List.flatten()
+        |> Enum.each(fn consumer -> 
+          :ets.match_delete(state.channels, {consumer, :_, :_})
+
+          case _get_channel(consumer, [], state) do
+            {:ok, channel} ->
+              send(consumer, {:new_channel, channel})
+            {:error, error} ->
+              send(consumer, {:channel_reopen_error, error})
+          end
+        end)
         {:noreply, state}
       {:error, reason, state} ->
-        timeout = next_retry(state.retry)
+        timeout = next_retry(state)
 
         Logger.warn("#{inspect state.module} Could not reconnect to AMQP Server, trying again in #{timeout} ms")
 
