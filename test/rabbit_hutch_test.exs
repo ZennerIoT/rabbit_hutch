@@ -24,11 +24,11 @@ defmodule RabbitHutchTest do
     Process.exit(conn.pid, @die)
 
     assert_receive {:connection_down, _reason}, 50, "Should receive a message telling us about the disconnect"
+    
     assert_receive {:new_channel, chan2}, 50, "Should receive a new channel after reconnecting"
 
     assert chan1 != chan2, "New channel should not be the old one"
 
-    refute_received _, "Should not have received a second message"
 
     assert {:ok, conn2} = MyApp.AMQPConnection.get_connection()
 

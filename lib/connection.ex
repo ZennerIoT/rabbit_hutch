@@ -173,9 +173,8 @@ defmodule RabbitHutch.Connection do
     try_reconnect(state)
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %{channels: tab} = state) do
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %{channels: tab, connection: conn} = state) do
     channels = :ets.match(tab, {:_, pid, :"$1"})
-    :ets.match_delete(tab, {:_, pid, :_})
     consumers = :ets.match(tab, {pid, :_, :"$1"})
     :ets.match_delete(tab, {pid, :_, :_})
 
@@ -186,6 +185,11 @@ defmodule RabbitHutch.Connection do
     Enum.each(consumers, fn [record] ->
       if Process.alive?(record.channel.pid), do: Process.exit(record.channel.pid, reason)
     end)
+
+    {:noreply, state}
+  end
+
+  def handle_info(_, state) do
 
     {:noreply, state}
   end
