@@ -105,6 +105,7 @@ defmodule RabbitHutch.Connection do
   def connect(state) do
     result = with {:ok, connection} <- AMQP.Connection.open(state.connection_opts),
          _ref = Process.monitor(connection.pid),
+         {:ok, _} = HalfLink.kill_them(connection.pid),
       do: {:ok, %{state | connection: connection, retry: 0}}
 
     case result do
