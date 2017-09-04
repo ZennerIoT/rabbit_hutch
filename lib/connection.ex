@@ -174,9 +174,9 @@ defmodule RabbitHutch.Connection do
 
   def handle_info({:DOWN, _ref, :process, pid, reason}, %{channels: channels} = state) do
     channels = :ets.match(channels, {:_, pid, :"$1"})
-    :ets.match_delete(channels, {:_, pid, :"$1"})
+    :ets.match_delete(channels, {:_, pid, :_})
     consumers = :ets.match(channels, {pid, :_, :"$1"})
-    :ets.match_delete(channels, {pid, :_, :"$1"})
+    :ets.match_delete(channels, {pid, :_, :_})
 
     Enum.each(channels, fn [record] -> 
       send(record.consumer, {:channel_down, record.channel, reason})
