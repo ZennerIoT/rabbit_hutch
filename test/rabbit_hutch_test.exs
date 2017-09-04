@@ -32,4 +32,13 @@ defmodule RabbitHutchTest do
 
     assert conn.pid != conn2.pid
   end
+
+  test "will message us about closed channels" do
+    MyApp.AMQPConnection.start_link()
+    {:ok, chan} = MyApp.AMQPConnection.channel(self())
+
+    Process.exit(chan.pid, :"No, I expect you to die!")
+
+    assert_receive {:channel_down, ^chan, _reason}
+  end
 end

@@ -172,11 +172,11 @@ defmodule RabbitHutch.Connection do
     try_reconnect(state)
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %{channels: channels} = state) do
-    channels = :ets.match(channels, {:_, pid, :"$1"})
-    :ets.match_delete(channels, {:_, pid, :_})
-    consumers = :ets.match(channels, {pid, :_, :"$1"})
-    :ets.match_delete(channels, {pid, :_, :_})
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %{channels: tab} = state) do
+    channels = :ets.match(tab, {:_, pid, :"$1"})
+    :ets.match_delete(tab, {:_, pid, :_})
+    consumers = :ets.match(tab, {pid, :_, :"$1"})
+    :ets.match_delete(tab, {pid, :_, :_})
 
     Enum.each(channels, fn [record] -> 
       send(record.consumer, {:channel_down, record.channel, reason})
