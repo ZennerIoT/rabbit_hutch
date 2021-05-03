@@ -4,14 +4,23 @@ defmodule RabbitHutch.Mixfile do
   def project do
     [
       app: :rabbit_hutch,
-      version: "0.1.0",
+      version: "1.0.0",
       elixir: "~> 1.4",
       start_permanent: Mix.env == :prod,
       deps: deps(),
+      description: "Managed RabbitMQ channels with auto-reconnect and backoff",
       docs: [
         main: "RabbitHutch", # The main page in the docs
         extras: ["README.md"]
-      ]
+      ],
+      package: package()
+    ]
+  end
+
+  def package() do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => "https://github.com/zenneriot/rabbit_hutch"}
     ]
   end
 
@@ -26,7 +35,7 @@ defmodule RabbitHutch.Mixfile do
   defp deps do
     [
       {:amqp, "~> 0.3.0"},
-      {:ex_doc, "~> 0.16", only: :dev, runtime: false}
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
 end
